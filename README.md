@@ -21,7 +21,7 @@
 
 ## 依赖
 
-- **操作系统**：Windows（需要系统里的楷体字体做度量模板：华文楷体 `STKAITI.TTF` 或简体楷体 `simkai.ttf`，系统一般自带）。
+- **操作系统**：**Windows 10 及以上**（不支持 Win7：Python 3.12 与 Qt6 均要求新系统。需要系统里的楷体字体做度量模板：华文楷体 `STKAITI.TTF` 或简体楷体 `simkai.ttf`，系统一般自带）。
 - **Python** 3.8 及以上。推荐 64 位 Python 3.12。
 - **Python 包**：
 
@@ -29,13 +29,8 @@
   pip install PySide6 fontTools
   ```
 
-  32 位 Python / Win7 环境装不了 PySide6 时，程序会自动退回 PySide2（Qt5）：
-
-  ```
-  pip install PySide2==5.15.2.1 fontTools
-  ```
-
-  两套 Qt 绑定无需改代码，程序启动时自动识别。
+  说明：代码同时兼容 PySide2（Qt5）——32 位 Python 或装不了 PySide6 的环境可用
+  `pip install PySide2==5.15.2.1 fontTools`，程序启动时自动识别，但**官方只提供 Win10+ 64 位发布包**，其余环境需自行从源码运行。
 
 ## 使用方法
 
