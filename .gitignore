@@ -1,0 +1,18 @@
+# Build outputs (PyInstaller)
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+
+# Virtual environments / portable toolchains
+.venv*
+_py38_32/
+
+# Personal handwriting data (backup = copy the .db file, keep out of the repo)
+handfont_project.db
+handfont_project.json
+handfont_project.json.bak
+
+# Generated font file (re-export from source anytime)
+HandFont.ttf
