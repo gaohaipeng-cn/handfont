@@ -194,14 +194,31 @@ GB2312_SYMBOL_COUNT = sum(1 for c in GB2312_CHARS if gb2312_position(c)[0] < 16)
 # ---------- 补充字: GB2312 之外的常用字(人名用字为主) ----------
 # GB2312 只有 6763 个汉字, 珺/玥/瑀/喆/赟 这类人名常用字都不在表内。
 # 单独一张文本表管理: 用户随时可以加字, 不必改代码。
-# 文件放在程序旁(可写、可编辑), 而不是打包进 _MEIPASS 的只读资源里 ——
-# 后者是临时解包目录, 用户改完重启就没了。
-EXTRA_FILE = os.path.join(_app_dir(), "extra_chars.txt")
+
+
+def _extra_dir():
+    """补充字表所在目录 —— 全机只放一份, 用户改的就是这一份。
+    源码运行: 脚本所在目录(项目根目录)。
+    打包成 onedir: --add-data 打进去的文件落在 exe 旁的 _internal 里, 那是真实目录、
+    可读可写, 直接用它, 不再往 exe 旁复制第二份。
+    onefile: _MEIPASS 是临时解包目录, 用户改完退出就没了, 只好退回 exe 目录
+    (首运行时从内置副本复制一份出来)。"""
+    res = _res_dir()
+    if not getattr(sys, "frozen", False):
+        return res
+    app = _app_dir()
+    norm = os.path.normcase
+    if norm(os.path.abspath(res)).startswith(norm(os.path.abspath(app)) + os.sep):
+        return res                  # onedir: _MEIPASS 就在 exe 目录下, 是常驻的
+    return app                      # onefile: 临时目录, 换个地方放
+
+
+EXTRA_FILE = os.path.join(_extra_dir(), "extra_chars.txt")
 
 
 def _ensure_extra_file():
-    """打包后第一次运行时, 把内置的 extra_chars.txt 复制到 exe 旁供用户编辑。
-    源码运行时文件就在脚本目录, 不会走到复制分支。"""
+    """只在 onefile 打包后需要: 把内置副本复制到 exe 旁, 让用户有得可改。
+    onedir 与源码运行时 EXTRA_FILE 就是原件本身, 不会走到复制分支。"""
     if os.path.exists(EXTRA_FILE):
         return
     src = os.path.join(_res_dir(), "extra_chars.txt")
@@ -1657,7 +1674,7 @@ def big_button(text):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("HandFont - 手写字体生成器")
+        self.setWindowTitle("HandFont - 手写字体生成器 v1.1")
         self.resize(900, 600)
         self.saved_data = {}
         self.adv_data = {}         # 自定义拉丁字宽 {字符: em}(画布拖虚线得到)
