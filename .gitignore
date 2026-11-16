@@ -10,7 +10,8 @@ __pycache__/
 _py38_32/
 
 # Personal handwriting data (backup = copy the .db file, keep out of the repo)
-handfont_project.db
+# 通配符覆盖 SQLite 的 -shm / -wal 临时文件
+handfont_project.db*
 handfont_project.json
 handfont_project.json.bak
 
