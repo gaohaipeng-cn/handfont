@@ -191,6 +191,57 @@ def gb2312_by_freq():
 # 符号区(区 1-9)字符数, 也是两种排序模式下"第一个汉字"所在行
 GB2312_SYMBOL_COUNT = sum(1 for c in GB2312_CHARS if gb2312_position(c)[0] < 16)
 
+# ---------- 补充字: GB2312 之外的常用字(人名用字为主) ----------
+# GB2312 只有 6763 个汉字, 珺/玥/瑀/喆/赟 这类人名常用字都不在表内。
+# 单独一张文本表管理: 用户随时可以加字, 不必改代码。
+# 文件放在程序旁(可写、可编辑), 而不是打包进 _MEIPASS 的只读资源里 ——
+# 后者是临时解包目录, 用户改完重启就没了。
+EXTRA_FILE = os.path.join(_app_dir(), "extra_chars.txt")
+
+
+def _ensure_extra_file():
+    """打包后第一次运行时, 把内置的 extra_chars.txt 复制到 exe 旁供用户编辑。
+    源码运行时文件就在脚本目录, 不会走到复制分支。"""
+    if os.path.exists(EXTRA_FILE):
+        return
+    src = os.path.join(_res_dir(), "extra_chars.txt")
+    if not os.path.exists(src) or os.path.abspath(src) == os.path.abspath(EXTRA_FILE):
+        return
+    try:
+        shutil.copyfile(src, EXTRA_FILE)
+    except OSError as e:
+        print("补充字表复制失败:", e)
+
+
+def _load_extra_chars():
+    """读补充字表: '#' 开头的行是注释, 其余行里的每个汉字按出现顺序收录。
+    去重、跳过非汉字、跳过已在 GB2312 里的字(免得同一个字出现在两张选项卡)。
+    文件缺失或损坏时返回空表, 界面照样能用。"""
+    _ensure_extra_file()
+    try:
+        with open(EXTRA_FILE, "r", encoding="utf-8") as fp:
+            raw = fp.read()
+    except OSError:
+        return []
+    out, seen = [], set()
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        for ch in line:
+            if ch in seen or ch.isspace():
+                continue
+            if not ("\u4e00" <= ch <= "\u9fff"):    # 只要汉字, 标点空格一律忽略
+                continue
+            if gb2312_position(ch):                 # 已在 GB2312, 不重复收录
+                continue
+            seen.add(ch)
+            out.append(ch)
+    return out
+
+
+EXTRA_CHARS = _load_extra_chars()
+
 UNITS_PER_EM = 1000          # 画布预览用的字身单位; 导出的字身单位取模板的 unitsPerEm
 REF_CELL_PX = 280.0          # 笔画粗细公式的参考格子边长(像素) —— 画布与导出共用
 DEFAULT_STROKE_WIDTH = 18    # 「笔画粗细」滑块默认值
@@ -1393,6 +1444,7 @@ def build_ttf(glyph_data, out_path, font_name="HandFont", font_version="1.0",
     glyf = None if slim else f["glyf"]
     built = {}          # slim 模式: glyph名 -> 新字形
     built_cps = []      # slim 模式: (码点, glyph名) 顺序
+    added = []          # 完整模式: 模板(楷体)里没有的字 -> 新建字形后要登记的三个表
     pending_cache = []  # 本次现算出来的轮廓, 导出成功后一次性写回缓存
     n_cached = n_computed = 0   # 统计: 命中多少、现算多少, 供界面提示
     total = max(1, len(glyph_data))
@@ -1408,7 +1460,12 @@ def build_ttf(glyph_data, out_path, font_name="HandFont", font_version="1.0",
             if not gname:
                 gname = "uni%04X" % cp
         elif not gname or gname not in glyf.glyphs:
-            continue
+            # 完整模式下模板没收录这个字(人名用字很常见): 不能直接跳过 ——
+            # 那会让用户辛苦写好的字在成品字体里凭空消失。
+            # 按精简模式的办法新建字形, 循环结束后再补登记 glyf 顺序 / 宽度 / 码位映射,
+            # 这样完整模式导出的字体里既保留楷体兜底, 也不丢后来补写的字。
+            gname = "uni%04X" % cp
+            added.append((cp, gname))
         # 轮廓来源: 缓存命中就直接取用(里面存的是已算完的最终轮廓), 否则现算后存起来
         # 拉丁字符按四线三格映射(基线在格子 75% 处), 汉字按米字格映射, 两者用不同缓存键
         latin = is_latin_char(ch)
@@ -1519,6 +1576,23 @@ def build_ttf(glyph_data, out_path, font_name="HandFont", font_version="1.0",
         report(1.0, "导出完成")
         return stats
 
+    # 完整模式: 模板缺的字在这里补登记 —— 字形顺序(决定 loca 编号)、hmtx 宽度、cmap 码位。
+    # 三处少任何一处, 保存时这个字形要么被丢掉, 要么在字体里查不到它。
+    if added:
+        hmtx_full = f["hmtx"]
+        order = getattr(glyf, "glyphOrder", None)
+        if order is None:
+            order = f.getGlyphOrder()
+            glyf.glyphOrder = order
+        for cp, gname in added:
+            if gname not in order:
+                order.append(gname)
+            if gname not in hmtx_full.metrics:
+                hmtx_full.metrics[gname] = (EM, 0)   # 和模板汉字一样宽, 左边距 0
+            for t in f["cmap"].tables:
+                if t.format in (4, 12):              # 现代 Windows 只用这两种子表
+                    t.cmap[cp] = gname
+
     # 完整模式: 自定义字宽逐字覆写 hmtx(只动 advance, 左边距保持模板原值)
     if adv_map:
         hmtx_full = f["hmtx"]
@@ -1621,28 +1695,35 @@ class MainWindow(QMainWindow):
         sort_row.addWidget(self.sort_combo, stretch=1)
         lout.addLayout(sort_row)
 
-        # 两张字符卡片做成选项卡(属性页样式): 单击左上角的卡片名切换,
+        # 三张字符卡片做成选项卡(属性页样式): 单击左上角的卡片名切换,
         # 一次只显示一张, 不再上下堆叠抢走半屏高度
         self.card_gb = CharCard()
         self.card_ascii = CharCard()
+        self.card_extra = CharCard()
         self.list_gb = self.card_gb.view
         self.list_ascii = self.card_ascii.view
+        self.list_extra = self.card_extra.view
         # 格子里已写的字画黑色、未写的画灰色: 数据源就是工程字典本身
-        for v in (self.list_gb, self.list_ascii):
+        for v in (self.list_gb, self.list_ascii, self.list_extra):
             v.set_written_source(self.saved_data)
         self._fill_gb(by_freq=DEFAULT_SORT_BY_FREQ)
         for ch in ASCII_CHARS:
             self._add_item(self.list_ascii, ch)
+        for ch in EXTRA_CHARS:
+            self._add_item(self.list_extra, ch)
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setUsesScrollButtons(False)
         self.tabs.setFont(QFont("Microsoft YaHei", 9))
         self.tabs.addTab(self.card_gb, "GB2312 字符集")
         self.tabs.addTab(self.card_ascii, "半角 ASCII")
+        self.tabs.addTab(self.card_extra, "补充字")
         self.tabs.setTabToolTip(0, "GB2312 全部 7445 个字符：区1-9 符号 + 区16-55 一级汉字 + 区56-87 二级汉字")
         self.tabs.setTabToolTip(1, "半角 ASCII 共 94 个（0x21-0x7E），不属于 GB2312 字符集，作附录单独一页")
+        self.tabs.setTabToolTip(2, "GB2312 以外的常用字（人名用字为主）。\n"
+                                   "内容来自程序旁的 extra_chars.txt，可自行增减，重启生效")
         lout.addWidget(self.tabs, stretch=1)
-        for v in (self.list_gb, self.list_ascii):
+        for v in (self.list_gb, self.list_ascii, self.list_extra):
             v.currentRowChanged.connect(
                 lambda row, view=v: self.on_char_changed(view, row))
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -1728,8 +1809,10 @@ class MainWindow(QMainWindow):
         if pos:
             # 码位与区位都放悬停提示, 不占格子; 便于和 GB2312 区位表逐格对照
             item.setToolTip(f"{ch}   U+{ord(ch):04X}   GB2312 区{pos[0]:02d} 位{pos[1]:02d}")
-        else:
+        elif ord(ch) < 128:
             item.setToolTip(f"{ch}   U+{ord(ch):04X}   半角 ASCII（不属于 GB2312 字符集）")
+        else:
+            item.setToolTip(f"{ch}   U+{ord(ch):04X}   GB2312 以外（补充字，见 extra_chars.txt）")
         view.addItem(item)
 
     def _fill_gb(self, by_freq):
@@ -1758,9 +1841,15 @@ class MainWindow(QMainWindow):
     def on_sort_changed(self, idx):
         self._fill_gb(by_freq=(idx == 1))
 
+    def _all_views(self):
+        """三张卡片的表格, 顺序与选项卡一致(GB2312 / ASCII / 补充字)"""
+        return (self.list_gb, self.list_ascii, self.list_extra)
+
     def _active_view(self):
         """当前所显示的那张卡片的表格 (选项卡切换后可见的那张)"""
-        return self.list_ascii if self.tabs.currentIndex() == 1 else self.list_gb
+        idx = self.tabs.currentIndex()
+        views = self._all_views()
+        return views[idx] if 0 <= idx < len(views) else self.list_gb
 
     @staticmethod
     def _first_visible_row(view):
@@ -1773,7 +1862,10 @@ class MainWindow(QMainWindow):
 
     def on_tab_changed(self, idx):
         """切到另一张卡片时, 把画布换到那张卡片当前选中的字符上"""
-        view = self.list_ascii if idx == 1 else self.list_gb
+        views = self._all_views()
+        if not (0 <= idx < len(views)):
+            return
+        view = views[idx]
         row = view.currentRow()
         if row < 0:
             # 这张卡片还没选过字: 落在第一个可见格上 (setCurrentRow 会触发 on_char_changed)
@@ -1788,7 +1880,7 @@ class MainWindow(QMainWindow):
 
     def filter_list(self, text):
         text = text.strip()
-        for v in (self.list_gb, self.list_ascii):
+        for v in self._all_views():
             v.setUpdatesEnabled(False)       # 七千多项逐个显隐, 关掉重绘避免卡顿
             try:
                 for i in range(v.count()):
@@ -1800,7 +1892,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "canvas") or not text:
             return                            # 初始化阶段还没有画布; 清空搜索时保持原位
         # 当前选中的格子可能被过滤掉了, 表格里会显得"一个都没选中";
-        # 挪到第一个命中的格子, 本页没有命中就跳到另一张卡片
+        # 挪到第一个命中的格子, 本页没有命中就去别的卡片找
         view = self._active_view()
         cur = view.currentItem()
         if cur is not None and not cur.isHidden():
@@ -1809,11 +1901,14 @@ class MainWindow(QMainWindow):
         if row >= 0:
             view.setCurrentRow(row)
             return
-        other = self.list_ascii if view is self.list_gb else self.list_gb
-        row = self._first_visible_row(other)
-        if row >= 0:
-            other.setCurrentRow(row)          # 触发 on_char_changed 换字
-            self.tabs.setCurrentIndex(1 if other is self.list_ascii else 0)
+        for i, other in enumerate(self._all_views()):     # 依次看其余两张卡片
+            if other is view:
+                continue
+            row = self._first_visible_row(other)
+            if row >= 0:
+                other.setCurrentRow(row)          # 触发 on_char_changed 换字
+                self.tabs.setCurrentIndex(i)
+                return
 
     def on_char_changed(self, view, row):
         if row < 0:
@@ -1953,8 +2048,8 @@ class MainWindow(QMainWindow):
             f"已保存: {len(self.saved_data)} 字　　{self.canvas.hint_text()}")
 
     def _repaint_lists(self):
-        """保存状态变了, 让两张卡片的格子重画一遍 (格子黑白取决于 saved_data)"""
-        for v in (self.list_gb, self.list_ascii):
+        """保存状态变了, 让三张卡片的格子重画一遍 (格子黑白取决于 saved_data)"""
+        for v in self._all_views():
             v.viewport().update()
 
     def _refresh_info(self):
@@ -1974,6 +2069,15 @@ class MainWindow(QMainWindow):
         miss = [c for c in ASCII_CHARS if c not in self.saved_data]
         tail = f"　缺 {len(miss)} 个：{''.join(miss)}" if miss else "　已写全"
         self.card_ascii.prog.setText(f"已写 {n_ascii}/94{tail}")
+        # 补充字卡片: 进度 + 加字提示(总量是几十上百个, 缺的不逐个列, 会撑爆左栏)
+        if EXTRA_CHARS:
+            n_extra = sum(1 for c in EXTRA_CHARS if c in self.saved_data)
+            self.card_extra.prog.setText(
+                f"已写 {n_extra}/{len(EXTRA_CHARS)}　"
+                f"（GB2312 以外，可编辑 extra_chars.txt 增减）")
+        else:
+            self.card_extra.prog.setText(
+                "补充字表为空\n在程序目录放 extra_chars.txt 后重启")
 
     def _move(self, delta):
         view = self._active_view()

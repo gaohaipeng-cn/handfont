@@ -110,7 +110,7 @@ if exist HandFont.spec del /q HandFont.spec
 set "ONEFILE="
 if /i "%MODE%"=="onefile" set "ONEFILE=--onefile"
 echo [6/8] Building, this takes 1-3 minutes ...
-"%VPY%" -m PyInstaller --noconfirm --clean --windowed --name HandFont --icon app.ico %ONEFILE% --contents-directory _internal --add-data "char_freq.txt;." --add-data "app.ico;." handfont.py
+"%VPY%" -m PyInstaller --noconfirm --clean --windowed --name HandFont --icon app.ico %ONEFILE% --contents-directory _internal --add-data "char_freq.txt;." --add-data "extra_chars.txt;." --add-data "app.ico;." handfont.py
 if errorlevel 1 goto ERR_BUILD
 
 rem ---------- 7/8 trim unused Qt payload ----------
